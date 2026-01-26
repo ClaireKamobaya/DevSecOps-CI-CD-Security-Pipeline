@@ -1,0 +1,20 @@
+---
+- name: Configure Instance 
+  hosts: all
+  remote_user: ec2-user
+  become: yes
+  become_user: root
+  gather_facts: yes
+  vars:
+    ansible_ssh_private_key_file: ClaireTestKeyPair.pem
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+  tasks: 
+    - name: Install nano package 
+      yum:
+        name: nano
+        state: present
+
+    - name: Copy project file
+      ansible.builtin.copy:
+        src: my-project.txt
+        dest: /home/ec2-user/my-project.txt

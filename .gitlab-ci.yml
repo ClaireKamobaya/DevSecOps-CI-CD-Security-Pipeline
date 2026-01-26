@@ -1,0 +1,111 @@
+stages:
+  - validate
+  - plan
+  - apply
+  - configure
+  - "Continuous Compliance"
+  - "Penetration Testing"
+  - destroy
+
+.terraform_init: &terraform_init |-
+  export TF_ADDRESS="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/terraform/state/pipeline-project-state"
+  export TF_USERNAME=gitlab-ci-token
+  export TF_PASSWORD=${CI_JOB_TOKEN}
+  terraform init -backend-config=address=${TF_ADDRESS} -backend-config=lock_address=${TF_ADDRESS}/lock -backend-config=unlock_address=${TF_ADDRESS}/lock -backend-config=username=${TF_USERNAME} -backend-config=password=${TF_PASSWORD} -backend-config=lock_method=POST -backend-config=unlock_method=DELETE -backend-config=retry_wait_min=5
+tf-validate:
+  image:
+    name: hashicorp/terraform
+    entrypoint: [""]
+  stage: validate
+  before_script:
+    - *terraform_init
+  script:
+    - terraform validate
+  tags:
+    - it-351-runner
+
+tf-plan:
+  image:
+    name: hashicorp/terraform
+    entrypoint: [""]
+  stage: plan
+  before_script:
+    - *terraform_init
+  script:
+    - terraform plan -lock=false -out=tfplan.plan
+    - echo "${TF_ADDRESS}" > backend_config.txt
+  artifacts:
+    name: tf-plan
+    paths:
+      - tfplan.plan
+      - backend_config.txt
+  tags:
+    - it-351-runner
+  
+tf-apply:
+  image: 
+    name: hashicorp/terraform
+    entrypoint: [""]
+  stage: apply
+  before_script:
+    - *terraform_init
+  script:
+    - terraform apply -auto-approve
+    - terraform output -raw instance_ip > ansible-hosts.yml
+  needs:
+    - job: tf-plan
+  artifacts:
+    name: ansible-host
+    paths:
+      - ansible-hosts.yml
+  tags:
+    - it-351-runner
+
+ansible:
+  image:
+    name: mullnerz/ansible-playbook
+    entrypoint: [""]
+  stage: configure
+  before_script:
+    - chmod 600 ClaireTestKeyPair.pem
+  script:
+    - ansible-playbook -i ansible-hosts.yml playbook.yml --key-file ClaireTestKeyPair.pem
+  needs:
+    - job: tf-apply
+  tags:
+    - it-351-runner
+
+chef-inspec:
+  stage: "Continuous Compliance"
+  image:
+    name: chef/inspec
+    entrypoint: [""]
+  script:
+    - inspec detect -t aws:// --chef-license accept
+    - inspec vendor lab-7-profile
+    - inspec exec lab-7-profile -t aws://
+  allow_failure: true
+  tags:
+    - it-351-runner
+
+zap:
+  stage: "Penetration Testing"
+  image: zaproxy/zap-stable
+  script:
+   - zap-full-scan.py -t https://marymount.edu/
+  allow_failure: true
+  tags:
+    - it-351-runner
+
+tf-destroy:
+  image:
+    name: hashicorp/terraform
+    entrypoint: [""]
+  stage: destroy
+  before_script:
+    - *terraform_init
+  script:
+    - terraform destroy -auto-approve
+  when: manual
+  tags:
+    - it-351-runner
